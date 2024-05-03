@@ -5,11 +5,11 @@
 #include <algorithm>
 #include <set>
 #include <map>
+#include <random>
 #include <queue>
 #include <chrono>
 #include <stack>
 #include <bits/stdc++.h>
-
 
 using namespace std;
 
@@ -18,6 +18,27 @@ typedef unsigned int EdgeID;
 typedef unsigned int PartitionID;
 
 int LOG_STEPS = 10;
+
+bool randomBoolean() {
+  static default_random_engine generator(std::random_device{}());
+  // With p = 0.5 you get equal probability for true and false
+  static bernoulli_distribution distribution(0.5);
+  return distribution(generator);
+}
+
+template <typename T>
+T randomFrom(const T min, const T max)
+{
+    static std::random_device rdev;
+    static std::default_random_engine re(rdev());
+    typedef typename std::conditional<
+        std::is_floating_point<T>::value,
+        std::uniform_real_distribution<T>,
+        std::uniform_int_distribution<T>>::type dist_type;
+    dist_type uni(min, max);
+    return static_cast<T>(uni(re));
+}
+
 
 struct Node {
     vector<NodeID> adjacents;
@@ -70,6 +91,41 @@ class Graph {
 
             }
             m = new_m;
+
+            return 0;
+        }
+
+        int read_graph_from_metis_file(string filename) {
+            ifstream file(filename);
+            if (!file.is_open()) {
+                cerr << "Error: Could not open file " << filename << endl;
+                return 1;
+            }
+
+            string line;
+            // Skip comment lines
+            while (getline(file, line) && line[0] == '%');
+
+            // Read number of vertices and edges
+            stringstream ss(line);
+            ss >> n >> m;
+
+            nodes.resize(n);
+
+            int node_id = 0;
+            while (getline(file, line)) {
+                if (line[0] == '%')
+                    continue;
+                stringstream ss(line);
+                int neighbor;
+                while (ss >> neighbor) {
+                    nodes[node_id].adjacents.push_back(neighbor-1);
+                }
+                node_id++;
+            }
+
+            file.close();
+
 
             return 0;
         }
@@ -139,9 +195,10 @@ class Partition {
         double v = 1.1;
         double gamma = 1.5;
         double alpha, lambda, rho;
+        double cutsize;
 
         Partition(Graph g, int num_partitions) : graph(g), k(num_partitions), partition(graph.n, -1), nodes_in_partition(num_partitions, 0) {
-            alpha = pow(k, 0.5) * (double) graph.m / pow(graph.n, gamma);
+            alpha = (double) graph.m * pow(k, 0.5) / pow(graph.n, gamma);
         };
 
         void stream_partition(string permutation, string status="progress", bool enforce_balance_constraint=true) {
@@ -150,26 +207,27 @@ class Partition {
                 cout << "|" << flush;
             }
 
+            int capacity = v * (graph.n/ ((float) k));
             vector<NodeID> node_ordering;
             get_node_ordering(node_ordering, permutation);
 
-            for (int i = 0; i<graph.n; i++) {
-                double max_gain = -1e15;
-                PartitionID best_partition = 0;
-                NodeID node_id = node_ordering[i];
 
+            for (int i = 0; i<graph.n; i++) {
+                double max_gain = std::numeric_limits<float>::lowest();
+                double gain;
+                PartitionID best_partition = randomFrom(0, k-1);
+                NodeID node_id = node_ordering[i];
                 for(PartitionID p_id=0; p_id<k; p_id++) {
                     // Check if new node in partition would exceed threshold v
-                    if (enforce_balance_constraint && nodes_in_partition[p_id] + 1 > v * (((double)graph.n)/k)) {
+                    if (enforce_balance_constraint && nodes_in_partition[p_id] >= capacity) {
                         continue;
                     }
-                    double gain = fennel_gain(node_id, p_id, nodes_in_partition[p_id]);
-                    if (gain > max_gain) {
+                    gain = fennel_gain(node_id, p_id, nodes_in_partition[p_id]);
+                    if (gain > max_gain || (randomBoolean() && gain == max_gain)) {
                         max_gain = gain;
                         best_partition = p_id;
                     }
                 }
-
                 partition[node_id] = best_partition;
                 nodes_in_partition[best_partition]++;
 
@@ -187,22 +245,24 @@ class Partition {
 
         void print_partition_evaluation() {
             Partition::print_partition_evaluation_title();
-            Partition::print_partition_evaluation(graph.n, graph.m, k, 100*lambda, rho);
+            Partition::print_partition_evaluation(graph.n, graph.m, k, cutsize, 100*lambda, rho);
         }
 
         static void print_partition_evaluation_title() {
             printElement("n", n_width);
             printElement("m", m_width);
             printElement("k", k_width);
+            printElement("cutsize", n_width);
             printElement("lambda", lambda_width);
             printElement("rho", rho_width);
-            cout << endl << "-----------------------------------------" << endl;
+            cout << endl << "---------------------------------------------------" << endl;
         }
 
-        static void print_partition_evaluation(int n, int m, int num_partition, double lambda, double rho) {
+        static void print_partition_evaluation(int n, int m, int num_partition, int cutsize, double lambda, double rho) {
             printElement(n, n_width);
             printElement(m, m_width);
             printElement(num_partition, k_width);
+            printElement(cutsize, n_width);
             printElement(lambda, lambda_width);
             printElement(rho, rho_width);
             cout << endl;
@@ -232,10 +292,10 @@ class Partition {
             }
         }
 
-        void dfs(vector<NodeID>& ordering, NodeID node_id) {
+        void dfs(vector<NodeID>& ordering, NodeID start_node_id) {
             vector<bool> already_visited(graph.n, false);
             stack<NodeID> stack;
-            stack.push(node_id);
+            stack.push(start_node_id);
 
             while (!stack.empty()) {
                 NodeID current_node_id = stack.top();
@@ -252,11 +312,20 @@ class Partition {
                     }
                 }
             }
+
+            NodeID node_id=0;
+            for (bool visited_node : already_visited) {
+                if (!visited_node) {
+                    ordering.push_back(node_id);
+                }
+                node_id++;
+            }
+
         }
 
         void bfs(vector<NodeID>& ordering, NodeID start_node_id) {
             queue<NodeID> queue;
-            vector<bool> visited(graph.n, false);
+            vector<bool> visited(graph.nodes.size(), false);
 
             queue.push(start_node_id);
             visited[start_node_id] = true;
@@ -266,11 +335,20 @@ class Partition {
 
                 ordering.push_back(current_node_id);
                 for (NodeID adjacent_id : graph.nodes[current_node_id].adjacents) {
+                    visited[adjacent_id];
                     if (!visited[adjacent_id]) {
                         queue.push(adjacent_id);
                         visited[adjacent_id] = true;
                     }
                 }
+            }
+
+            NodeID node_id=0;
+            for (bool visited_node : visited) {
+                if (!visited_node) {
+                    ordering.push_back(node_id);
+                }
+                node_id++;
             }
         }
 
@@ -282,25 +360,26 @@ class Partition {
                 }
             }
 
-            double intra_partition_cost = alpha * gamma * pow(nodes_in_partition, gamma-1);
-            return (double) neighbours_in_partition - intra_partition_cost;
+            double intra_partition_cost = alpha * gamma * sqrt(nodes_in_partition);
+            return neighbours_in_partition - intra_partition_cost;
         }
 
-        double compute_cut_size() {
-            int cut_size = 0;
-            for (NodeID node_id = 0; node_id < graph.n; ++node_id) {
+        void compute_cut_size() {
+            cutsize = 0;
+            for (NodeID node_id = 0; node_id < graph.n; node_id++) {
                 for (NodeID neighbor_id : graph.nodes[node_id].adjacents) {
                     if (partition[neighbor_id] != partition[node_id]) {
-                        cut_size++;
+                        cutsize++;
                     }
                 }
             }
-            return (double) cut_size / 2; // Divide by 2 to account for doubled edges
+            cutsize /= 2; // Divide by 2 to account for doubled edges
         }
 
         void eval_partition() {
-            double cut_size = compute_cut_size();
-            lambda = cut_size / graph.m;
+
+            compute_cut_size();
+            lambda = cutsize / graph.m;
             int max_load = 0;
             for (PartitionID i=0; i<k; i++) {
                 int load = count(partition.begin(), partition.end(), i);
@@ -327,12 +406,12 @@ void evaluate_hp_random_graphs(string ordering) {
 
     int rounds = 5;
     vector<int> v_k = {4, 8, 16, 32, 64, 128};
-    double avg_lambda, avg_rho, avg_m;
+    double avg_lambda, avg_rho, avg_m, avg_cutsize;
     cout << "Ordering: " << ordering << endl;
     Partition::print_partition_evaluation_title();
 
     for (int num_partitions : v_k) {
-        avg_lambda = avg_rho = avg_m = 0;
+        avg_lambda = avg_rho = avg_m = avg_cutsize = 0;
 
         for (int i=0; i<rounds; i++) {
             Graph random_graph = Graph::generate_hp_random_graph(num_nodes, num_partitions, intra_prob, inter_prob);
@@ -342,17 +421,22 @@ void evaluate_hp_random_graphs(string ordering) {
             avg_lambda += p.lambda;
             avg_rho += p.rho;
             avg_m += random_graph.m;
+            avg_cutsize += p.cutsize;
         }
 
         avg_lambda =  100 * avg_lambda / rounds;
         avg_rho /= rounds;
         avg_m /= rounds;
+        avg_cutsize /=rounds;
 
-        Partition::print_partition_evaluation(num_nodes, (int) avg_m, num_partitions, avg_lambda, avg_rho);
+        Partition::print_partition_evaluation(num_nodes, (int) avg_m, num_partitions, avg_cutsize, avg_lambda, avg_rho);
     }
-
-
 }
+
+bool ORDERING_STANDARD = true;
+bool ORDERING_RANDOM = true;
+bool ORDERING_DFS = true;
+bool ORDERING_BFS = true;
 
 int main(int argc, char* argv[]) {
 
@@ -369,42 +453,41 @@ int main(int argc, char* argv[]) {
 
 
         Graph graph = Graph();
-        int ret_val = graph.read_edge_list_from_file(filename);
+        int ret_val = graph.read_graph_from_metis_file(filename);
         if (ret_val != 0) {
             return ret_val;
         }
 
-        string ordering = "standard";
-        cout << endl << "Ordering: " << ordering << endl;
-        Partition p_std = Partition(graph, k);
-        p_std.stream_partition(ordering, "none");
-        p_std.print_partition_evaluation();
+        string ordering;
 
-        ordering = "random";
-        cout << endl << "Ordering: " << ordering << endl;
-        Partition p_random = Partition(graph, k);
-        p_random.stream_partition(ordering, "none");
-        p_random.print_partition_evaluation();
-
-        ordering = "dfs";
-        cout << endl << "Ordering: " << ordering << endl;
-        Partition p_dfs = Partition(graph, k);
-        p_dfs.stream_partition(ordering, "none");
-        p_dfs.print_partition_evaluation();
-
-        ordering = "bfs";
-        cout << endl << "Ordering: " << ordering << endl;
-        Partition p_bfs = Partition(graph, k);
-        p_bfs.stream_partition(ordering, "none");
-        p_bfs.print_partition_evaluation();
+        if (ORDERING_STANDARD){
+            ordering = "standard";
+            cout << endl << "Ordering: " << ordering << endl;
+            Partition p_std = Partition(graph, k);
+            p_std.stream_partition(ordering, "none");
+            p_std.print_partition_evaluation();
+        } if (ORDERING_RANDOM) {
+            ordering = "random";
+            cout << endl << "Ordering: " << ordering << endl;
+            Partition p_random = Partition(graph, k);
+            p_random.stream_partition(ordering, "none");
+            p_random.print_partition_evaluation();
+        } if (ORDERING_DFS) {
+            ordering = "dfs";
+            cout << endl << "Ordering: " << ordering << endl;
+            Partition p_dfs = Partition(graph, k);
+            p_dfs.stream_partition(ordering, "none");
+            p_dfs.print_partition_evaluation();
+        } if (ORDERING_BFS) {
+            ordering = "bfs";
+            cout << endl << "Ordering: " << ordering << endl;
+            Partition p_bfs = Partition(graph, k);
+            p_bfs.stream_partition(ordering, "none");
+            p_bfs.print_partition_evaluation();
+        }
 
         cout << endl;
     }
-
-
-
-
-
 
     return 0;
 }
