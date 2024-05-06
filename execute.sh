@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Compile your program, ie:
-clang++ -std=c++17  $1 -o application
+make
 
 # Check compilation succeeded
 if [[ $? -ne 0 ]]; then
@@ -10,4 +10,4 @@ if [[ $? -ne 0 ]]; then
 fi
 
 # Pipe your input into the application
-./application $2 $3
+./application $1 $2
