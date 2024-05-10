@@ -75,6 +75,48 @@ int Graph::read_graph_from_metis_file(string filename) {
     return 0;
 }
 
+Graph Graph::extract_subgraph(vector<NodeID>& ordering, NodeID start_node, int buffer_size, vector<NodeID>& local_to_global) const { //,unordered_map<NodeID, NodeID>& local_to_global) const {
+    Graph subgraph;
+    // Set subgraph.n to buffer_size if does not extend n
+    subgraph.n = start_node + buffer_size > n ? n - start_node : buffer_size;
+    subgraph.nodes.resize(subgraph.n);
+    local_to_global.resize(subgraph.n);
+    subgraph.m = 0;
+
+    if (buffer_size == 1) {
+        local_to_global[0] = start_node;
+        return subgraph;
+    }
+
+    unordered_map<NodeID, NodeID> global_to_local;
+
+    // Create global to local (and local to global) assignment
+    for (NodeID i = 0; i < subgraph.n; ++i) {
+        NodeID global_id = ordering[start_node+i];
+        global_to_local[global_id] = i;
+        local_to_global[i] = global_id;
+    }
+
+    // Extract adjacency list of the node in the subgraph
+    for (NodeID i = 0; i < subgraph.n; ++i) {
+        NodeID global_node_id = ordering[start_node+i];
+        const Node& global_node = nodes[global_node_id];
+        Node& local_node = subgraph.nodes[i];
+
+        for (NodeID global_adj : global_node.adjacents) {
+            // Check if neighbour is part of subgraph
+            if (global_to_local.find(global_adj) != global_to_local.end()) {
+                local_node.adjacents.push_back(global_to_local[global_adj]);
+                subgraph.m++;
+            }
+        }
+    }
+
+    subgraph.m /= 2;
+    return subgraph;
+}
+
+
 Graph Graph::generate_hp_random_graph(int num_nodes, int num_partitions, double intra_prob, double inter_prob) {
     Graph graph;
     graph.n = num_nodes;
