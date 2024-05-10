@@ -15,20 +15,22 @@
 
 using namespace std;
 
-
-bool ORDERING_STANDARD = true;
-bool ORDERING_RANDOM = true;
-bool ORDERING_DFS = true;
-bool ORDERING_BFS = true;
+unordered_map<string, bool> ORDERING_ENABLED = {
+    {ORDERING_DFS,      false},
+    {ORDERING_BFS,      true},
+    {ORDERING_RANDOM,   false},
+    {ORDERING_NATURAL,  true}
+};
 
 int main(int argc, char* argv[]) {
 
 
-    if (argc != 3) {
+    if (argc != 4) {
             cerr << "Usage: " << argv[0] << " <filename>" << "(optional) <k>" << endl;
             return 1;
     } else {
         int k =  atoi(argv[2]);
+        unsigned batch_size = atoi(argv[3]);
 
         string filename = argv[1];
 
@@ -39,36 +41,55 @@ int main(int argc, char* argv[]) {
             return ret_val;
         }
 
-        string ordering;
+        cout << endl << "# ---- Graph info ----- #" << endl;
+        cout << "n: " << graph.n << ", m:" << graph.m << ", k: " << k << endl;
 
-        if (ORDERING_STANDARD){
-            ordering = "standard";
-            cout << endl << "Ordering: " << ordering << endl;
-            Partition p_std = Partition(graph, k);
-            p_std.stream_partition(ordering, "none");
-            p_std.print_partition_evaluation();
-        } if (ORDERING_RANDOM) {
-            ordering = "random";
-            cout << endl << "Ordering: " << ordering << endl;
-            Partition p_random = Partition(graph, k);
-            p_random.stream_partition(ordering, "none");
-            p_random.print_partition_evaluation();
-        } if (ORDERING_DFS) {
-            ordering = "dfs";
-            cout << endl << "Ordering: " << ordering << endl;
-            Partition p_dfs = Partition(graph, k);
-            p_dfs.stream_partition(ordering, "none");
-            p_dfs.print_partition_evaluation();
-        } if (ORDERING_BFS) {
-            ordering = "bfs";
-            cout << endl << "Ordering: " << ordering << endl;
-            Partition p_bfs = Partition(graph, k);
-            p_bfs.stream_partition(ordering, "none");
-            p_bfs.print_partition_evaluation();
+        auto begin = std::chrono::high_resolution_clock::now();
+
+        vector<NodeID> node_ordering;
+        Partition p = Partition(graph, k);
+        for (const auto& pair : ORDERING_ENABLED) {
+            const string& ordering = pair.first;
+            bool enabled = pair.second;
+
+            if (enabled) {
+                cout << endl << "Ordering: " << ordering << endl;
+                Partition::print_partition_evaluation_title();
+
+                node_ordering.clear();
+                Partition::get_node_ordering(graph, node_ordering, ordering);
+
+                p = Partition(graph, k);
+                p.stream_partition(node_ordering, false);
+                p.print_partition_evaluation("streaming");
+
+                p = Partition(graph, k);
+                p.stream_partition(node_ordering, true, 1);
+                p.print_partition_evaluation("streaming+delay(1)");
+
+                p = Partition(graph, k);
+                p.stream_partition(node_ordering, true, graph.n/100);
+                p.print_partition_evaluation("streaming+delay(n/100)");
+
+                p = Partition(graph, k);
+                p.buffered_stream_partition(node_ordering, batch_size, "none", false);
+                p.print_partition_evaluation("subgraph" + to_string(batch_size));
+
+                p = Partition(graph, k);
+                p.buffered_stream_partition(node_ordering, batch_size, "none", true);
+                p.print_partition_evaluation("subgraph"+to_string(batch_size)+"+delay");
+                cout << "_________________________________________________________" << endl;
+            }
         }
 
+
         cout << endl;
+
+        auto duration = chrono::high_resolution_clock::now() - begin;
+        auto ms = chrono::duration_cast<chrono::milliseconds>(duration).count();
+        cout << endl << "Running time: " << ms << "ms" << endl << endl;
     }
+
 
     return 0;
 }

@@ -19,7 +19,16 @@
 
 using namespace std;
 
-typedef unsigned int PartitionID;
+typedef int PartitionID;
+
+enum Ordering {NATURAL, RANDOM, BFS, DFS};
+
+const string ORDERING_NATURAL = "natural";
+const string ORDERING_RANDOM = "random";
+const string ORDERING_BFS = "bfs";
+const string ORDERING_DFS = "dfs";
+
+float SHOULD_BE_DELAYED_BARRIER = 0.15;
 
 
 template<typename T> void printElement(T t, const int& width);
@@ -37,25 +46,31 @@ public:
     double gamma = 1.5;
     double alpha, lambda, rho;
     double cutsize;
+    int capacity;
+
+    int64_t t_partition_ms;
 
     Partition(Graph g, int num_partitions);
 
-    void stream_partition(string permutation, string status="progress", bool enforce_balance_constraint=true);
+    void stream_partition(vector<NodeID>& node_ordering, bool delayed_nodes_enabled, unsigned eval_delay_after=1, string status="none");
 
-    void buffered_stream_partition(string permutation, int buffer_size, string status="progress", bool enforce_balance_constraint=true);
+    void buffered_stream_partition(vector<NodeID>& node_ordering, int buffer_size, string status, bool delay_nodes_enabled=true);
 
-    void print_partition_evaluation();
+    void print_partition_evaluation(string configuration, bool print_title=false);
 
     static void print_partition_evaluation_title();
 
-    static void print_partition_evaluation(int n, int m, int num_partition, int cutsize, double lambda, double rho);
+    static void print_partition_evaluation(string configuration, int n, int m, int num_partition, int cutsize, double lambda, double rho, int64_t t_partition_ms);
 
+    static void get_node_ordering(Graph& g, vector<NodeID>& node_ordering, string permutation);
 private:
-    void get_node_ordering(vector<NodeID>& node_ordering, string permutation);
+    PartitionID partition_node(NodeID node_id);
 
-    void dfs(vector<NodeID>& ordering, NodeID start_node_id);
+    bool should_be_delayed(NodeID node_id);
 
-    void bfs(vector<NodeID>& ordering, NodeID start_node_id);
+    static void dfs(Graph& g, vector<NodeID>& ordering, NodeID start_node_id);
+
+    static void bfs(Graph& g, vector<NodeID>& ordering, NodeID start_node_id);
 
     double fennel_gain(NodeID node_id, PartitionID p_id, int nodes_in_partition);
 

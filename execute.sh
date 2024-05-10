@@ -10,4 +10,4 @@ if [[ $? -ne 0 ]]; then
 fi
 
 # Pipe your input into the application
-./application $1 $2
+./application $1 $2 $3
