@@ -13,12 +13,16 @@ MAIN = application
 
 all: $(MAIN)
 
+
 $(MAIN): $(OBJS) main.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
+
 
 $(BINDIR)/%.o: $(SRCDIR)/%.cpp
 	@mkdir -p $(BINDIR)
 	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(OBJS): global.h
 
 main.o: main.cpp
 	$(CC) $(CFLAGS) -c -o $@ $<

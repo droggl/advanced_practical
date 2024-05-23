@@ -12,28 +12,21 @@
 #include <queue>
 #include <chrono>
 #include <stack>
-#include <bits/stdc++.h>
+#include <iomanip>
+#include <sys/resource.h>
 #include "graph.h"
-
 
 
 using namespace std;
 
 typedef int PartitionID;
 
-enum Ordering {NATURAL, RANDOM, BFS, DFS};
-
 const string ORDERING_NATURAL = "natural";
 const string ORDERING_RANDOM = "random";
 const string ORDERING_BFS = "bfs";
 const string ORDERING_DFS = "dfs";
 
-float SHOULD_BE_DELAYED_BARRIER = 0.15;
-
-
 template<typename T> void printElement(T t, const int& width);
-
-
 
 class Partition {
 public:
@@ -48,7 +41,9 @@ public:
     double cutsize;
     int capacity;
 
+    float average_bfs_depth = 0;
     int64_t t_partition_ms;
+    long maxRSS;
 
     Partition(Graph g, int num_partitions);
 
@@ -56,13 +51,13 @@ public:
 
     void buffered_stream_partition(vector<NodeID>& node_ordering, int buffer_size, string status, bool delay_nodes_enabled=true);
 
-    void print_partition_evaluation(string configuration, bool print_title=false);
+    void print_partition_evaluation(string configuration, string ordering, bool print_title=false);
 
     static void print_partition_evaluation_title();
 
-    static void print_partition_evaluation(string configuration, int n, int m, int num_partition, int cutsize, double lambda, double rho, int64_t t_partition_ms);
+    static void print_partition_evaluation(string configuration, string ordering, int n, int m, int num_partition, int cutsize, double lambda, double rho, int64_t t_partition_ms, long maxRSS);
 
-    static void get_node_ordering(Graph& g, vector<NodeID>& node_ordering, string permutation);
+    static float get_node_ordering(Graph& g, vector<NodeID>& node_ordering, string permutation);
 private:
     PartitionID partition_node(NodeID node_id);
 
@@ -70,7 +65,7 @@ private:
 
     static void dfs(Graph& g, vector<NodeID>& ordering, NodeID start_node_id);
 
-    static void bfs(Graph& g, vector<NodeID>& ordering, NodeID start_node_id);
+    static void bfs(Graph& g, vector<NodeID>& ordering, NodeID start_node_id, vector<bool>& visited);
 
     double fennel_gain(NodeID node_id, PartitionID p_id, int nodes_in_partition);
 

@@ -1,12 +1,26 @@
 #include "partition.h"
+#include "../global.h"
 #include "random_utils.h"
+#include <list>
 
-Partition::Partition(Graph g, int num_partitions) : graph(g), k(num_partitions), partition(graph.n, -1), nodes_in_partition(num_partitions, 0) {
-    alpha = (double) graph.m * pow(k, 0.5) / pow(graph.n, gamma);
-    capacity = v * (graph.n / ((float) k));
+long getMaxRSS() {
+    struct rusage usage;
+    if (getrusage(RUSAGE_SELF, &usage) == 0) {
+        // The maximum resident set size is in kilobytes
+        return usage.ru_maxrss;
+    } else {
+        std::cerr << "Error getting resource usage information." << std::endl;
+        // Return a sentinel value or handle the error in an appropriate way
+        return -1;
+    }
 }
 
-void Partition::stream_partition(vector<NodeID>& node_ordering, bool delay_nodes_enabled, unsigned eval_delay_after, string status) {
+Partition::Partition(Graph g, int num_partitions) : graph(g), k(num_partitions), partition(graph.n, -1), nodes_in_partition(num_partitions, 0) {
+    alpha = (double)graph.m * pow(k, 0.5) / pow(graph.n, gamma);
+    capacity = v * (graph.n / ((float)k));
+}
+
+void Partition::stream_partition(vector<NodeID> &node_ordering, bool delay_nodes_enabled, unsigned eval_delay_after, string status) {
     auto start = std::chrono::high_resolution_clock::now();
 
     int progress = 0;
@@ -14,18 +28,18 @@ void Partition::stream_partition(vector<NodeID>& node_ordering, bool delay_nodes
         cout << "|" << flush;
     }
 
-    vector<NodeID> delayed_nodes;
+    list<NodeID> delayed_nodes;
     int num_delayed_nodes = 0;
-    vector<int> should_be_delayed_counts(graph.n,0);
+    vector<int> should_be_delayed_counts(graph.n, 0);
 
     unsigned eval_delayed_nodes_counter = 0;
     for (unsigned i = 0; i < graph.n; i++) {
         NodeID node_id = node_ordering[i];
 
         if (delay_nodes_enabled) {
-            if (eval_delayed_nodes_counter >= eval_delay_after-1) { //graph.n / 10 )  { // >=  graph.n / 1000) {
+            if (eval_delayed_nodes_counter >= eval_delay_after - 1) { // graph.n / 10 )  { // >=  graph.n / 1000) {
                 eval_delayed_nodes_counter = 0;
-                for (auto it = delayed_nodes.begin(); it != delayed_nodes.end(); ) {
+                for (auto it = delayed_nodes.begin(); it != delayed_nodes.end();) {
                     NodeID delayed_node_id = *it;
                     should_be_delayed_counts[delayed_node_id]++;
                     if (!should_be_delayed(delayed_node_id)) {
@@ -75,13 +89,19 @@ void Partition::stream_partition(vector<NodeID>& node_ordering, bool delay_nodes
     //     cout << cnt << endl;
     // }
 
-    eval_partition();
-
     auto duration = chrono::high_resolution_clock::now() - start;
     t_partition_ms = chrono::duration_cast<chrono::milliseconds>(duration).count();
+
+    maxRSS = getMaxRSS();
+    eval_partition();
 }
 
 bool Partition::should_be_delayed(NodeID node_id) {
+    // Do not buffer nodes with degree > MAX_DEGREE_DELAY
+    if (graph.nodes[node_id].adjacents.size() > MAX_DEGREE_DELAY) {
+        return false;
+    }
+
     float percentage_of_neighbours_partitioned = 0;
     for (NodeID adj_id : graph.nodes[node_id].adjacents) {
         if (partition[adj_id] != -1) {
@@ -95,7 +115,7 @@ bool Partition::should_be_delayed(NodeID node_id) {
 PartitionID Partition::partition_node(NodeID node_id) {
     double max_gain = std::numeric_limits<float>::lowest();
     double gain;
-    PartitionID best_partition = randomFrom(0, (int) k - 1);
+    PartitionID best_partition = randomFrom(0, (int)k - 1);
     for (PartitionID p_id = 0; p_id < k; p_id++) {
         // Check if new node in partition would exceed threshold v
         if (nodes_in_partition[p_id] >= capacity) {
@@ -109,17 +129,16 @@ PartitionID Partition::partition_node(NodeID node_id) {
     }
     return best_partition;
 }
-
-void Partition::buffered_stream_partition(vector<NodeID>& node_ordering, int buffer_size, string status, bool delay_nodes_enabled) {
+//
+void Partition::buffered_stream_partition(vector<NodeID> &node_ordering, int buffer_size, string status, bool delay_nodes_enabled) {
     auto start = std::chrono::high_resolution_clock::now();
 
-
-    vector<NodeID> delayed_nodes;
+    list<NodeID> delayed_nodes;
     int num_delayed_nodes = 0;
 
     for (NodeID start_node_id = 0; start_node_id < graph.n; start_node_id += buffer_size) {
         if (delay_nodes_enabled) {
-            for (auto it = delayed_nodes.begin(); it != delayed_nodes.end(); ) {
+            for (auto it = delayed_nodes.begin(); it != delayed_nodes.end();) {
                 NodeID delayed_node_id = *it;
                 if (!should_be_delayed(delayed_node_id)) {
                     PartitionID best_partition = partition_node(delayed_node_id);
@@ -138,7 +157,7 @@ void Partition::buffered_stream_partition(vector<NodeID>& node_ordering, int buf
 
         vector<NodeID> subgraph_bfs_ordering;
         // Partition::bfs(subgraph, subgraph_bfs_ordering, 0);
-        Partition::get_node_ordering(subgraph, subgraph_bfs_ordering, ORDERING_BFS);
+        average_bfs_depth += get_node_ordering(subgraph, subgraph_bfs_ordering, ORDERING_BFS);
 
         for (NodeID local_node_id : subgraph_bfs_ordering) {
             NodeID node_id = local_to_global[local_node_id];
@@ -155,8 +174,6 @@ void Partition::buffered_stream_partition(vector<NodeID>& node_ordering, int buf
             partition[node_id] = best_partition;
             nodes_in_partition[best_partition]++;
         }
-
-
     }
 
     if (delay_nodes_enabled) {
@@ -165,36 +182,21 @@ void Partition::buffered_stream_partition(vector<NodeID>& node_ordering, int buf
             partition[delayed_node_id] = best_partition;
             nodes_in_partition[best_partition]++;
         }
-        // cout << "number of delayed nodes: " << num_delayed_nodes << endl;
     }
-
-    // cout << "n: " << graph.n << endl;
-
-
-    // for (PartitionID p_id : partition) {
-    //     if (p_id == -1) {
-    //         cout << "-1" << endl;
-    //     }
-    // }
-
-
-
-    eval_partition();
 
     auto duration = chrono::high_resolution_clock::now() - start;
     t_partition_ms = chrono::duration_cast<chrono::milliseconds>(duration).count();
-}
 
-
-
-
-void Partition::print_partition_evaluation(string configuration, bool print_title) {
-    if (print_title) {
-        Partition::print_partition_evaluation_title();
+    maxRSS = getMaxRSS();
+    if (SHOW_AVG_BFS_DEPTH) {
+        float avg_bfs_depth = average_bfs_depth / (ceil(graph.n / buffer_size));
+        cout << left << setw(15) << setfill(' ') << setprecision(6) << avg_bfs_depth << "|";
     }
-    Partition::print_partition_evaluation(configuration, graph.n, graph.m, k, cutsize, 100 * lambda, rho, t_partition_ms);
+    eval_partition();
+
 }
 
+const int ordering_width = 10;
 const int configuration_width = 25;
 const int n_width = 7;
 const int m_width = 10;
@@ -202,8 +204,10 @@ const int k_width = 4;
 const int lambda_width = 8;
 const int rho_width = 7;
 const int t_width = 6;
+const int maxRSS_width = 12;
 
 void Partition::print_partition_evaluation_title() {
+    printElement("ordering", ordering_width);
     printElement("configuration", configuration_width);
     // printElement("n", n_width);
     // printElement("m", m_width);
@@ -212,10 +216,20 @@ void Partition::print_partition_evaluation_title() {
     printElement("lambda", lambda_width);
     printElement("rho", rho_width);
     printElement("t (ms)", t_width);
-    cout << endl << "---------------------------------------------------------_" << endl;
+    // printElement("maxRSS (KB)", maxRSS_width);
+    cout << endl
+         << "-----------------------------------------------------------------------" << endl;
 }
 
-void Partition::print_partition_evaluation(string configuration, int n, int m, int num_partition, int cutsize, double lambda, double rho, int64_t t_partition_ms) {
+void Partition::print_partition_evaluation(string configuration, string ordering, bool print_title) {
+    if (print_title) {
+        Partition::print_partition_evaluation_title();
+    }
+    Partition::print_partition_evaluation(configuration, ordering, graph.n, graph.m, k, cutsize, 100 * lambda, rho, t_partition_ms, maxRSS);
+}
+
+void Partition::print_partition_evaluation(string configuration, string ordering, int n, int m, int num_partition, int cutsize, double lambda, double rho, int64_t t_partition_ms, long maxRSS) {
+    printElement(ordering, ordering_width);
     printElement(configuration, configuration_width);
     // printElement(n, n_width);
     // printElement(m, m_width);
@@ -224,10 +238,12 @@ void Partition::print_partition_evaluation(string configuration, int n, int m, i
     printElement(lambda, lambda_width);
     printElement(rho, rho_width);
     printElement(t_partition_ms, t_width);
+    // printElement(maxRSS, maxRSS_width);
     cout << endl;
 }
 
-void Partition::get_node_ordering(Graph& g, vector<NodeID> &node_ordering, string permutation) {
+float Partition::get_node_ordering(Graph &g, vector<NodeID> &node_ordering, string permutation) {
+    float avg_bfs_depth = 0;
     if (permutation == ORDERING_NATURAL || permutation == ORDERING_RANDOM) {
         node_ordering.resize(g.n);
         for (NodeID i = 0; i < g.n; ++i) {
@@ -236,7 +252,7 @@ void Partition::get_node_ordering(Graph& g, vector<NodeID> &node_ordering, strin
         if (permutation == ORDERING_RANDOM) {
             random_shuffle(node_ordering.begin(), node_ordering.end());
         }
-    } else if (permutation == ORDERING_DFS|| permutation == ORDERING_BFS) {
+    } else if (permutation == ORDERING_DFS || permutation == ORDERING_BFS) {
         random_device rd;
         mt19937 gen(rd());
         uniform_int_distribution<> dis(0, g.n - 1);
@@ -244,12 +260,31 @@ void Partition::get_node_ordering(Graph& g, vector<NodeID> &node_ordering, strin
         if (permutation == ORDERING_DFS) {
             dfs(g, node_ordering, start_node);
         } else {
-            bfs(g, node_ordering, start_node);
+            vector<bool> visited(g.nodes.size(), false);
+            bfs(g, node_ordering, start_node, visited);
+
+            NodeID node_id = 0;
+            int cnt = 1;
+            // cout << "checking unvisited nodes, visited size: " << visited.size() << " number: " << count(visited.begin(), visited.end(), false) << endl;
+            for (bool visited_node : visited) {
+                // cout << "node_id: " << node_id << " " << visited_node << endl;
+                if (!visited_node) {
+                    cnt++;
+                    // bfs(g, node_ordering, node_id, visited);
+                    node_ordering.push_back(node_id);
+                }
+                node_id++;
+            }
+            avg_bfs_depth += g.n / (float)cnt;
+            // cout << "average bfs depth: " << g.n / (float) cnt << ", number of BFSs: " << cnt << endl;
+            // cout << "NUMBER OF BFSs PERFORMED: " << cnt << endl;
+            // cout << "n: " << g.n << ", node ordering size: " << node_ordering.size() << endl;
         }
     }
+    return avg_bfs_depth;
 }
 
-void Partition::dfs(Graph& g, vector<NodeID> &ordering, NodeID start_node_id) {
+void Partition::dfs(Graph &g, vector<NodeID> &ordering, NodeID start_node_id) {
     vector<bool> already_visited(g.n, false);
     stack<NodeID> stack;
     stack.push(start_node_id);
@@ -279,9 +314,8 @@ void Partition::dfs(Graph& g, vector<NodeID> &ordering, NodeID start_node_id) {
     }
 }
 
-void Partition::bfs(Graph& g, vector<NodeID> &ordering, NodeID start_node_id) {
+void Partition::bfs(Graph &g, vector<NodeID> &ordering, NodeID start_node_id, vector<bool> &visited) {
     queue<NodeID> queue;
-    vector<bool> visited(g.nodes.size(), false);
 
     queue.push(start_node_id);
     visited[start_node_id] = true;
@@ -298,19 +332,11 @@ void Partition::bfs(Graph& g, vector<NodeID> &ordering, NodeID start_node_id) {
             }
         }
     }
-
-    NodeID node_id = 0;
-    for (bool visited_node : visited) {
-        if (!visited_node) {
-            ordering.push_back(node_id);
-        }
-        node_id++;
-    }
 }
 
 double Partition::fennel_gain(NodeID node_id, PartitionID p_id, int nodes_in_partition) {
     int neighbours_in_partition = 0;
-    for (NodeID adj: graph.nodes[node_id].adjacents) {
+    for (NodeID adj : graph.nodes[node_id].adjacents) {
         if (partition[adj] == p_id) {
             neighbours_in_partition++;
         }
@@ -342,12 +368,12 @@ void Partition::eval_partition() {
             max_load = load;
         }
     }
-    rho = max_load / (partition.size() / (double) k);
+    rho = max_load / (partition.size() / (double)k);
 }
 
 void Partition::log_progress(int i, int &progress) {
     int log_steps = 10;
-    if ((i % (int) (1.0 / log_steps * graph.n)) == 0) {
+    if ((i % (int)(1.0 / log_steps * graph.n)) == 0) {
         cout << "o" << flush;
         progress++;
     }

@@ -1,19 +1,10 @@
 #ifndef GRAPH_HEADER_H
 #define GRAPH_HEADER_H
 
-#include <cmath>
-#include <cstdio>
+
 #include <vector>
-#include <iostream>
-#include <algorithm>
-#include <set>
-#include <map>
-#include <random>
-#include <queue>
-#include <chrono>
-#include <stack>
-#include <fstream>
-#include <sstream>
+#include <string>
+
 
 using namespace std;
 

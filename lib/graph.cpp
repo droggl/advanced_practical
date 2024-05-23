@@ -1,4 +1,11 @@
 #include "graph.h"
+#include <fstream>
+#include <iostream>
+#include <sstream>
+#include <algorithm>
+#include <unordered_map>
+#include <random>
+
 
 int Graph::read_edge_list_from_file(string filename) {
     ifstream file(filename);
@@ -40,6 +47,7 @@ int Graph::read_edge_list_from_file(string filename) {
 
     return 0;
 }
+
 
 int Graph::read_graph_from_metis_file(string filename) {
     ifstream file(filename);
