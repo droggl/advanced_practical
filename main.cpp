@@ -15,6 +15,13 @@ unordered_map<string, bool> ORDERING_ENABLED = {
     {ORDERING_NATURAL,  true}
 };
 
+constexpr bool STREAMING_ENABLED                                = true;
+constexpr bool STREAMING_WITH_DELAY_ENABLED                     = true;
+constexpr bool STREAMING_WITH_PQ_ENABLED                        = true;
+constexpr bool BUFFERED_SUBGRAPH_STREAMING_ENABLED              = false;
+constexpr bool BUFFERED_SUBGRAPH_STREAMING_WITH_DELAY_ENABLED   = true;
+
+
 map<string, vector<NodeID>> saved_node_orderings;
 
 void get_cached_node_ordering(Graph& g, vector<NodeID>& node_ordering, string ordering) {
@@ -33,7 +40,7 @@ int main(int argc, char* argv[]) {
             return 1;
     } else {
         int k =  atoi(argv[2]);
-        unsigned batch_size = atoi(argv[3]);
+        // unsigned batch_size = atoi(argv[3]);
 
         string filename = argv[1];
 
@@ -45,7 +52,7 @@ int main(int argc, char* argv[]) {
         }
         auto duration_reading_graph = chrono::high_resolution_clock::now() - begin_reading_graph;
         auto ms_reading_graph = chrono::duration_cast<chrono::milliseconds>(duration_reading_graph).count();
-        cout << endl << "Reading graph t: " << ms_reading_graph << "ms" << endl << endl;
+
 
         cout << endl << "# ---- Graph info ----- #" << endl;
         cout << "n: " << graph.n << ", m:" << graph.m << ", k: " << k << endl << endl;
@@ -55,18 +62,20 @@ int main(int argc, char* argv[]) {
         vector<NodeID> node_ordering;
         Partition p = Partition(graph, k);
 
-        Partition::print_partition_evaluation_title();
-        for (string ordering : {ORDERING_NATURAL, ORDERING_RANDOM, ORDERING_BFS}) {
-            get_cached_node_ordering(graph, node_ordering, ordering);
-            p = Partition(graph, k);
-            p.stream_partition(node_ordering, false);
-            p.print_partition_evaluation("streaming", ordering);
+        if (STREAMING_ENABLED){
+            Partition::print_partition_evaluation_title();
+            for (string ordering : {ORDERING_NATURAL, ORDERING_RANDOM, ORDERING_BFS}) {
+                get_cached_node_ordering(graph, node_ordering, ordering);
+                p = Partition(graph, k);
+                p.stream_partition(node_ordering, false);
+                p.print_partition_evaluation("streaming", ordering);
+            }
         }
 
         vector<int> batch_sizes; // = {16384, 32768}; // {1, 10, 64, 512, 1024, 2048, 4096, 8192, 16384, 32768};
 
         int j = 0;
-        for (int i = graph.n; i > 100; i /= 2) {
+        for (int i = graph.n; i > 500; i /= 2) {
             if (j<2) {
                 batch_sizes.push_back(i);
             } else if (j % 2 == 0) {
@@ -87,24 +96,37 @@ int main(int argc, char* argv[]) {
             if (enabled) {
                 get_cached_node_ordering(graph, node_ordering, ordering);
 
-                for(int delay_after : batch_sizes) {
+
+                if (STREAMING_WITH_PQ_ENABLED) {
+                    // Streaming with priority queue
                     p = Partition(graph, k);
-                    p.stream_partition(node_ordering, true, delay_after);
+                    p.stream_partition_with_pq(node_ordering);
                     if(SHOW_AVG_BFS_DEPTH)
                         cout << left << setw(15) << setfill(' ') << setprecision(6) << p.average_bfs_depth << "|";
-                    p.print_partition_evaluation("streaming+delay(" + to_string(delay_after) + ")", ordering);
-                }
-
-                for (int batch_size_new : batch_sizes) {
-                    p = Partition(graph, k);
-                    p.buffered_stream_partition(node_ordering, batch_size_new, "none", false);
-                    p.print_partition_evaluation("subgraph" + to_string(batch_size_new), ordering);
-                }
-
-                for (int batch_size_new : batch_sizes) {
-                    p = Partition(graph, k);
-                    p.buffered_stream_partition(node_ordering, batch_size_new, "none", true);
-                    p.print_partition_evaluation("subgraph"+to_string(batch_size_new)+"+delay", ordering);
+                    p.print_partition_evaluation("streaming with pq", ordering);
+                } if(STREAMING_WITH_DELAY_ENABLED) {
+                    // Streaming with delayed nodes
+                    for(int delay_after : batch_sizes) {
+                        p = Partition(graph, k);
+                        p.stream_partition(node_ordering, true, delay_after);
+                        if(SHOW_AVG_BFS_DEPTH)
+                            cout << left << setw(15) << setfill(' ') << setprecision(6) << p.average_bfs_depth << "|";
+                        p.print_partition_evaluation("streaming+delay(" + to_string(delay_after) + ")", ordering);
+                    }
+                } if (BUFFERED_SUBGRAPH_STREAMING_ENABLED) {
+                    // Buffered streaming, creating subgraph and traversing nodes of subgraph in BFS order
+                    for (int batch_size_new : batch_sizes) {
+                        p = Partition(graph, k);
+                        p.buffered_stream_partition(node_ordering, batch_size_new, "none", false);
+                        p.print_partition_evaluation("subgraph" + to_string(batch_size_new), ordering);
+                    }
+                } if (BUFFERED_SUBGRAPH_STREAMING_WITH_DELAY_ENABLED) {
+                    // Buffered streaming, creating subgraph and traversing nodes of subgraph in BFS order with delayed nodes
+                    for (int batch_size_new : batch_sizes) {
+                        p = Partition(graph, k);
+                        p.buffered_stream_partition(node_ordering, batch_size_new, "none", true);
+                        p.print_partition_evaluation("subgraph"+to_string(batch_size_new)+"+delay", ordering);
+                    }
                 }
 
                 cout << "______________________________________________________________________" << endl;
@@ -116,6 +138,7 @@ int main(int argc, char* argv[]) {
 
         auto duration = chrono::high_resolution_clock::now() - begin;
         auto ms = chrono::duration_cast<chrono::milliseconds>(duration).count();
+        cout << endl << "Reading graph t: " << ms_reading_graph << "ms" << endl;
         cout << endl << "Running time: " << ms << "ms" << endl << endl;
     }
 

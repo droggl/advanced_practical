@@ -43,9 +43,7 @@ void Partition::stream_partition(vector<NodeID> &node_ordering, bool delay_nodes
                     NodeID delayed_node_id = *it;
                     should_be_delayed_counts[delayed_node_id]++;
                     if (!should_be_delayed(delayed_node_id)) {
-                        PartitionID best_partition = partition_node(delayed_node_id);
-                        partition[delayed_node_id] = best_partition;
-                        nodes_in_partition[best_partition]++;
+                        partition_node(delayed_node_id);
                         it = delayed_nodes.erase(it); // Remove node and set iterator to next element
                     } else {
                         ++it;
@@ -62,9 +60,7 @@ void Partition::stream_partition(vector<NodeID> &node_ordering, bool delay_nodes
             }
         }
 
-        PartitionID best_partition = partition_node(node_id);
-        partition[node_id] = best_partition;
-        nodes_in_partition[best_partition]++;
+        partition_node(node_id);
 
         if (status == "progress") {
             log_progress(i, progress);
@@ -73,9 +69,7 @@ void Partition::stream_partition(vector<NodeID> &node_ordering, bool delay_nodes
 
     if (delay_nodes_enabled) {
         for (NodeID delayed_node_id : delayed_nodes) {
-            PartitionID best_partition = partition_node(delayed_node_id);
-            partition[delayed_node_id] = best_partition;
-            nodes_in_partition[best_partition]++;
+            partition_node(delayed_node_id);
         }
 
         // cout << "number of delayed nodes: " << num_delayed_nodes << endl;
@@ -112,7 +106,7 @@ bool Partition::should_be_delayed(NodeID node_id) {
     return percentage_of_neighbours_partitioned < SHOULD_BE_DELAYED_BARRIER;
 }
 
-PartitionID Partition::partition_node(NodeID node_id) {
+void Partition::partition_node(NodeID node_id) {
     double max_gain = std::numeric_limits<float>::lowest();
     double gain;
     PartitionID best_partition = randomFrom(0, (int)k - 1);
@@ -127,7 +121,9 @@ PartitionID Partition::partition_node(NodeID node_id) {
             best_partition = p_id;
         }
     }
-    return best_partition;
+
+    partition[node_id] = best_partition;
+    nodes_in_partition[best_partition]++;
 }
 //
 void Partition::buffered_stream_partition(vector<NodeID> &node_ordering, int buffer_size, string status, bool delay_nodes_enabled) {
@@ -141,9 +137,7 @@ void Partition::buffered_stream_partition(vector<NodeID> &node_ordering, int buf
             for (auto it = delayed_nodes.begin(); it != delayed_nodes.end();) {
                 NodeID delayed_node_id = *it;
                 if (!should_be_delayed(delayed_node_id)) {
-                    PartitionID best_partition = partition_node(delayed_node_id);
-                    partition[delayed_node_id] = best_partition;
-                    nodes_in_partition[best_partition]++;
+                    partition_node(delayed_node_id);
                     it = delayed_nodes.erase(it); // Remove node and set iterator to next element
                 } else {
                     ++it;
@@ -170,30 +164,102 @@ void Partition::buffered_stream_partition(vector<NodeID> &node_ordering, int buf
                 }
             }
 
-            PartitionID best_partition = partition_node(node_id);
-            partition[node_id] = best_partition;
-            nodes_in_partition[best_partition]++;
+            partition_node(node_id);
         }
     }
 
     if (delay_nodes_enabled) {
         for (NodeID delayed_node_id : delayed_nodes) {
-            PartitionID best_partition = partition_node(delayed_node_id);
-            partition[delayed_node_id] = best_partition;
-            nodes_in_partition[best_partition]++;
+            partition_node(delayed_node_id);
         }
     }
 
     auto duration = chrono::high_resolution_clock::now() - start;
     t_partition_ms = chrono::duration_cast<chrono::milliseconds>(duration).count();
 
-    maxRSS = getMaxRSS();
+    if (SHOW_MAX_RSS)
+        maxRSS = getMaxRSS();
+
     if (SHOW_AVG_BFS_DEPTH) {
         float avg_bfs_depth = average_bfs_depth / (ceil(graph.n / buffer_size));
         cout << left << setw(15) << setfill(' ') << setprecision(6) << avg_bfs_depth << "|";
     }
+
     eval_partition();
 
+}
+
+// Priority is the ratio of partitioned neighbours to total neighbours
+float Partition::get_priority(NodeID node_id) {
+    float number_of_partitioned_neighnours = 0;
+    for (NodeID adj_id : graph.nodes[node_id].adjacents) {
+        if (partition[adj_id] != -1) {
+            number_of_partitioned_neighnours++;
+        }
+    }
+    return number_of_partitioned_neighnours / graph.nodes[node_id].adjacents.size();
+}
+
+// Update the priority value of the neighbours of the node that was just partitioned in the priority queue (insert with new value)
+void Partition::update_neighbours_priority(NodeID node_id, priority_queue<pq_node, vector<pq_node>, ComparePriority> &pq, vector<float> &node_id_to_priority) {
+    for (NodeID adj_id : graph.nodes[node_id].adjacents) {
+        // If neightbour is not partitioned and already in the priority queue, update the priority value
+        if (partition[adj_id] == -1 && node_id_to_priority[adj_id] != -1) {
+            // float new_priority = get_priority(adj_id);
+            float new_priority = node_id_to_priority[adj_id] + 1 / (float) graph.nodes[adj_id].adjacents.size();
+            node_id_to_priority[adj_id] = new_priority;
+            if (new_priority == 1) {
+                // If all neighbours are partitioned, remove from priority queue
+                partition_node(adj_id);
+                update_neighbours_priority(adj_id, pq, node_id_to_priority);
+            } else {
+                pq.push(pq_node(adj_id, new_priority));
+            }
+        }
+    }
+}
+
+// Stream partitioning with priority queue
+void Partition::stream_partition_with_pq(vector<NodeID> &node_ordering) {
+
+    auto start = std::chrono::high_resolution_clock::now();
+
+    priority_queue<pq_node, vector<pq_node>, ComparePriority> pq_delayed_nodes;
+    vector<float> node_id_to_priority(graph.n, -1); // if -1: not in priority queue, else: index in priority queue with corresponding priority
+
+    // First, assign nodes to the priority queue with priority based on the already partitioned neighbors
+    for (NodeID node_id : node_ordering) {
+        // If degree of node is bigger than MAX_DEGREE_DELAY, partition node directly
+        bool should_be_partitioned_directly = graph.nodes[node_id].adjacents.size() > MAX_DEGREE_DELAY;
+        if (should_be_partitioned_directly) {
+            // Partition node and update priority of neighbours in pq
+            partition_node(node_id);
+            update_neighbours_priority(node_id, pq_delayed_nodes, node_id_to_priority);
+        } else if (node_id_to_priority[node_id] == -1) { // If node is not already in priority queue
+            // Add node to priority queue
+            float priority = get_priority(node_id);
+            pq_delayed_nodes.push(pq_node(node_id, priority));
+            node_id_to_priority[node_id] = priority;
+        }
+    }
+    int cnt = 0;
+    // Second, empty the priority queue and assign nodes to partitions
+    while (!pq_delayed_nodes.empty()) {
+        pq_node pq_node = pq_delayed_nodes.top();
+        pq_delayed_nodes.pop();
+        if (pq_node.priority == node_id_to_priority[pq_node.id]) { // If priority is the current priority of the node
+            // Partition node and update priority of neighbours in pq
+            partition_node(pq_node.id);
+            update_neighbours_priority(pq_node.id, pq_delayed_nodes, node_id_to_priority);
+        } else {
+            cnt++;
+        }
+    }
+
+    auto duration = chrono::high_resolution_clock::now() - start;
+    t_partition_ms = chrono::duration_cast<chrono::milliseconds>(duration).count();
+    maxRSS = getMaxRSS();
+    eval_partition();
 }
 
 const int ordering_width = 10;
@@ -216,7 +282,8 @@ void Partition::print_partition_evaluation_title() {
     printElement("lambda", lambda_width);
     printElement("rho", rho_width);
     printElement("t (ms)", t_width);
-    // printElement("maxRSS (KB)", maxRSS_width);
+    if (SHOW_MAX_RSS)
+        printElement("maxRSS (KB)", maxRSS_width);
     cout << endl
          << "-----------------------------------------------------------------------" << endl;
 }
@@ -238,7 +305,8 @@ void Partition::print_partition_evaluation(string configuration, string ordering
     printElement(lambda, lambda_width);
     printElement(rho, rho_width);
     printElement(t_partition_ms, t_width);
-    // printElement(maxRSS, maxRSS_width);
+    if (SHOW_MAX_RSS)
+        printElement(maxRSS, maxRSS_width);
     cout << endl;
 }
 
